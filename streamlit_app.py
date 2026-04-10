@@ -60,16 +60,17 @@ section[data-testid="stSidebar"] {min-width:300px; max-width:340px}
 # ---------------------------------------------------------------------------
 # Secrets → env (for Streamlit Cloud deployment)
 # ---------------------------------------------------------------------------
-try:
-    for key in ("OPENROUTER_API_KEY", "FRED_API_KEY", "GOOGLE_API_KEY"):
-        val = st.secrets.get(key, "")
-        if val and not os.environ.get(key):
-            os.environ[key] = val
-except Exception:
-    pass
-
 from dotenv import load_dotenv
 load_dotenv()
+
+# Load secrets from Streamlit Cloud into env vars
+for key in ("OPENROUTER_API_KEY", "FRED_API_KEY", "GOOGLE_API_KEY"):
+    try:
+        val = st.secrets[key]
+        if val:
+            os.environ[key] = str(val)
+    except (KeyError, FileNotFoundError):
+        pass
 
 # ---------------------------------------------------------------------------
 # Helpers
