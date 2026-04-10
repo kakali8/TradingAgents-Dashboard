@@ -42,7 +42,7 @@ Engage actively by addressing any specific concerns raised, refuting the weaknes
 
         response = llm.invoke(prompt)
 
-        time.sleep(20)
+        time.sleep(2)
 
         argument = f"Aggressive Analyst: {response.content}"
 

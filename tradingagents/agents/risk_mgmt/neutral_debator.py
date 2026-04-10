@@ -42,7 +42,7 @@ Engage actively by analyzing both sides critically, addressing weaknesses in the
 
         response = llm.invoke(prompt)
 
-        time.sleep(20)
+        time.sleep(2)
 
         argument = f"Neutral Analyst: {response.content}"
 

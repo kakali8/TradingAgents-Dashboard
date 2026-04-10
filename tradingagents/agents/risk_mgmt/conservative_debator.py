@@ -42,7 +42,7 @@ Engage by questioning their optimism and emphasizing the potential downsides the
 
         response = llm.invoke(prompt)
 
-        time.sleep(20)
+        time.sleep(2)
 
         argument = f"Conservative Analyst: {response.content}"
 
