@@ -3,11 +3,11 @@
 import os
 import re
 import json
-import threading
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date
 
 import streamlit as st
+import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -25,10 +25,8 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* ---- overall ---- */
 section[data-testid="stSidebar"] {min-width:300px; max-width:340px}
 
-/* ---- decision badge ---- */
 .decision-badge {
     display:inline-block; padding:12px 32px; border-radius:12px;
     font-size:2rem; font-weight:800; letter-spacing:2px; color:#fff;
@@ -40,7 +38,6 @@ section[data-testid="stSidebar"] {min-width:300px; max-width:340px}
 .badge-underweight {background:linear-gradient(135deg,#ff7043,#e64a19)}
 .badge-sell       {background:linear-gradient(135deg,#f44336,#b71c1c)}
 
-/* ---- metric card ---- */
 .metric-card {
     background:var(--background-secondary, #f8f9fa); border-radius:12px;
     padding:20px; text-align:center; border:1px solid rgba(128,128,128,.15);
@@ -48,7 +45,6 @@ section[data-testid="stSidebar"] {min-width:300px; max-width:340px}
 .metric-card h3 {margin:0; font-size:.85rem; opacity:.6}
 .metric-card p  {margin:4px 0 0; font-size:1.5rem; font-weight:700}
 
-/* ---- debate column ---- */
 .debate-card {
     border-radius:10px; padding:16px; margin-bottom:12px;
     border:1px solid rgba(128,128,128,.15);
@@ -56,11 +52,6 @@ section[data-testid="stSidebar"] {min-width:300px; max-width:340px}
 .debate-bull {background:rgba(0,200,83,.07)}
 .debate-bear {background:rgba(244,67,54,.07)}
 .debate-judge {background:rgba(33,150,243,.07)}
-
-/* ---- progress ---- */
-.step-done   {color:#00c853}
-.step-active {color:#ff9800}
-.step-wait   {color:#9e9e9e}
 </style>
 """,
     unsafe_allow_html=True,
@@ -69,12 +60,14 @@ section[data-testid="stSidebar"] {min-width:300px; max-width:340px}
 # ---------------------------------------------------------------------------
 # Secrets → env (for Streamlit Cloud deployment)
 # ---------------------------------------------------------------------------
-for key in ("OPENROUTER_API_KEY", "FRED_API_KEY", "GOOGLE_API_KEY"):
-    val = st.secrets.get(key, "") if hasattr(st, "secrets") else ""
-    if val and not os.environ.get(key):
-        os.environ[key] = val
+try:
+    for key in ("OPENROUTER_API_KEY", "FRED_API_KEY", "GOOGLE_API_KEY"):
+        val = st.secrets.get(key, "")
+        if val and not os.environ.get(key):
+            os.environ[key] = val
+except Exception:
+    pass
 
-# Also load from .env for local development
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -83,18 +76,11 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 AGENT_STEPS = [
-    "Market Analyst",
-    "Social Analyst",
-    "News Analyst",
-    "Fundamentals Analyst",
-    "Macro Analyst",
-    "Bull Researcher",
-    "Bear Researcher",
-    "Research Manager",
+    "Market Analyst", "Social Analyst", "News Analyst",
+    "Fundamentals Analyst", "Macro Analyst",
+    "Bull Researcher", "Bear Researcher", "Research Manager",
     "Trader",
-    "Aggressive Analyst",
-    "Conservative Analyst",
-    "Neutral Analyst",
+    "Aggressive Analyst", "Conservative Analyst", "Neutral Analyst",
     "Portfolio Manager",
 ]
 
@@ -115,7 +101,6 @@ def badge_class(decision: str) -> str:
 
 
 def extract_decision(text: str) -> str:
-    """Pull the first BUY / HOLD / SELL / etc. from the report."""
     for word in ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"):
         if word in text.upper():
             return word
@@ -123,7 +108,6 @@ def extract_decision(text: str) -> str:
 
 
 def extract_metrics(fundamentals: str) -> dict:
-    """Best-effort extraction of key numbers from fundamentals report."""
     metrics = {}
     patterns = {
         "PE Ratio": r"PE Ratio.*?:\s*([\d.]+)",
@@ -141,11 +125,8 @@ def extract_metrics(fundamentals: str) -> dict:
 
 
 def extract_allocation(text: str) -> dict:
-    """Parse portfolio allocation table from final decision."""
     alloc = {}
-    for m in re.finditer(
-        r"\|\s*([A-Za-z\s\(\)]+?)\s*\|\s*(\d+)%", text
-    ):
+    for m in re.finditer(r"\|\s*([A-Za-z\s\(\)]+?)\s*\|\s*(\d+)%", text):
         name = m.group(1).strip()
         pct = int(m.group(2))
         if pct > 0:
@@ -154,7 +135,6 @@ def extract_allocation(text: str) -> dict:
 
 
 def list_history() -> list[dict]:
-    """Scan eval_results/ for past runs."""
     results = []
     base = Path("eval_results")
     if not base.exists():
@@ -167,9 +147,7 @@ def list_history() -> list[dict]:
             continue
         for f in sorted(log_dir.glob("full_states_log_*.json")):
             date_str = f.stem.replace("full_states_log_", "")
-            results.append(
-                {"ticker": ticker_dir.name, "date": date_str, "path": str(f)}
-            )
+            results.append({"ticker": ticker_dir.name, "date": date_str, "path": str(f)})
     return results
 
 
@@ -177,7 +155,6 @@ def load_result(path: str) -> dict | None:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        # JSON has date keys at root; return the first (usually only) entry
         for _date_key, state in data.items():
             return state
     except Exception:
@@ -185,90 +162,100 @@ def load_result(path: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Run analysis in background thread
+# Run analysis synchronously with st.status progress
 # ---------------------------------------------------------------------------
 
-def run_analysis_thread(ticker: str, trade_date: str, analysts: list[str]):
-    """Execute the full TradingAgents pipeline, updating session_state progress."""
-    ss = st.session_state
+def run_analysis_sync(ticker: str, trade_date: str, analysts: list[str]):
+    """Run the full pipeline in the main thread with live progress."""
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+    from tradingagents.default_config import DEFAULT_CONFIG
 
-    try:
-        from tradingagents.graph.trading_graph import TradingAgentsGraph
-        from tradingagents.default_config import DEFAULT_CONFIG
+    config = DEFAULT_CONFIG.copy()
+    config["llm_provider"] = "openrouter"
+    config["deep_think_llm"] = "openai/gpt-4o-mini"
+    config["quick_think_llm"] = "openai/gpt-4o-mini"
+    config["max_debate_rounds"] = 1
+    config["max_risk_discuss_rounds"] = 1
 
-        config = DEFAULT_CONFIG.copy()
-        config["llm_provider"] = "openrouter"
-        config["deep_think_llm"] = "openai/gpt-4o-mini"
-        config["quick_think_llm"] = "openai/gpt-4o-mini"
-        config["max_debate_rounds"] = 1
-        config["max_risk_discuss_rounds"] = 1
+    # Build step map for progress tracking
+    step_map = {name: i for i, name in enumerate(AGENT_STEPS)}
+    total_steps = len(AGENT_STEPS)
 
-        ss.progress_step = 0
-        ss.progress_label = "Initializing agents..."
+    with st.status("🚀 Running analysis...", expanded=True) as status:
+        progress_bar = st.progress(0, text="Initializing agents...")
+        step_container = st.empty()
 
+        # Initialize
+        progress_bar.progress(0, text="Loading TradingAgents framework...")
         ta = TradingAgentsGraph(
             selected_analysts=analysts, debug=False, config=config
         )
 
-        # We patch the graph to track which node fires
-        original_stream = ta.graph.stream
+        progress_bar.progress(0.05, text="Starting analysis pipeline...")
 
-        def tracked_stream(state, **kwargs):
-            step_map = {}
-            for i, name in enumerate(AGENT_STEPS):
-                step_map[name] = i
+        # Run with streaming to track progress
+        init_state = ta.propagator.create_initial_state(ticker, trade_date)
+        args = ta.propagator.get_graph_args()
 
-            for chunk in original_stream(state, **kwargs):
-                # chunk is a dict; keys are node names
-                if isinstance(chunk, dict):
-                    for node_name in chunk:
-                        if node_name in step_map:
-                            ss.progress_step = step_map[node_name] + 1
-                            ss.progress_label = f"{node_name} completed"
-                yield chunk
+        completed_steps = set()
+        final_state = None
 
-        ta.graph.stream = tracked_stream
+        for chunk in ta.graph.stream(init_state, **args):
+            final_state = chunk
+            if isinstance(chunk, dict):
+                for node_name in chunk:
+                    if node_name in step_map and node_name not in completed_steps:
+                        completed_steps.add(node_name)
+                        step_idx = step_map[node_name] + 1
+                        pct = min(step_idx / total_steps, 1.0)
+                        progress_bar.progress(pct, text=f"✅ {node_name} completed")
 
-        ss.progress_label = "Starting analysis pipeline..."
-        final_state, decision = ta.propagate(ticker, trade_date)
+                        # Update step list
+                        step_lines = []
+                        for s in AGENT_STEPS:
+                            if s in completed_steps:
+                                step_lines.append(f"✅ {s}")
+                            elif s == node_name:
+                                step_lines.append(f"🔄 {s}")
+                            else:
+                                step_lines.append(f"⬜ {s}")
+                        step_container.text("\n".join(step_lines))
 
-        # Build result dict matching JSON log format
-        result = {
-            "company_of_interest": ticker,
-            "trade_date": trade_date,
-            "market_report": final_state.get("market_report", ""),
-            "sentiment_report": final_state.get("sentiment_report", ""),
-            "news_report": final_state.get("news_report", ""),
-            "fundamentals_report": final_state.get("fundamentals_report", ""),
-            "macro_report": final_state.get("macro_report", ""),
-            "investment_debate_state": {
-                "bull_history": final_state.get("investment_debate_state", {}).get("bull_history", ""),
-                "bear_history": final_state.get("investment_debate_state", {}).get("bear_history", ""),
-                "history": final_state.get("investment_debate_state", {}).get("history", ""),
-                "current_response": final_state.get("investment_debate_state", {}).get("current_response", ""),
-                "judge_decision": final_state.get("investment_debate_state", {}).get("judge_decision", ""),
-            },
-            "trader_investment_decision": final_state.get("trader_investment_plan", ""),
-            "risk_debate_state": {
-                "aggressive_history": final_state.get("risk_debate_state", {}).get("aggressive_history", ""),
-                "conservative_history": final_state.get("risk_debate_state", {}).get("conservative_history", ""),
-                "neutral_history": final_state.get("risk_debate_state", {}).get("neutral_history", ""),
-                "history": final_state.get("risk_debate_state", {}).get("history", ""),
-                "judge_decision": final_state.get("risk_debate_state", {}).get("judge_decision", ""),
-            },
-            "investment_plan": final_state.get("investment_plan", ""),
-            "final_trade_decision": final_state.get("final_trade_decision", ""),
-        }
+        progress_bar.progress(1.0, text="✅ Analysis complete!")
+        status.update(label="✅ Analysis complete!", state="complete", expanded=False)
 
-        ss.run_result = result
-        ss.run_decision = decision
-        ss.progress_step = len(AGENT_STEPS)
-        ss.progress_label = "Analysis complete!"
-        ss.run_error = None
+    # Process final decision
+    decision = extract_decision(final_state.get("final_trade_decision", ""))
 
-    except Exception as e:
-        ss.run_error = str(e)
-        ss.progress_label = f"Error: {e}"
+    # Build result dict
+    result = {
+        "company_of_interest": ticker,
+        "trade_date": trade_date,
+        "market_report": final_state.get("market_report", ""),
+        "sentiment_report": final_state.get("sentiment_report", ""),
+        "news_report": final_state.get("news_report", ""),
+        "fundamentals_report": final_state.get("fundamentals_report", ""),
+        "macro_report": final_state.get("macro_report", ""),
+        "investment_debate_state": {
+            "bull_history": final_state.get("investment_debate_state", {}).get("bull_history", ""),
+            "bear_history": final_state.get("investment_debate_state", {}).get("bear_history", ""),
+            "history": final_state.get("investment_debate_state", {}).get("history", ""),
+            "current_response": final_state.get("investment_debate_state", {}).get("current_response", ""),
+            "judge_decision": final_state.get("investment_debate_state", {}).get("judge_decision", ""),
+        },
+        "trader_investment_decision": final_state.get("trader_investment_plan", ""),
+        "risk_debate_state": {
+            "aggressive_history": final_state.get("risk_debate_state", {}).get("aggressive_history", ""),
+            "conservative_history": final_state.get("risk_debate_state", {}).get("conservative_history", ""),
+            "neutral_history": final_state.get("risk_debate_state", {}).get("neutral_history", ""),
+            "history": final_state.get("risk_debate_state", {}).get("history", ""),
+            "judge_decision": final_state.get("risk_debate_state", {}).get("judge_decision", ""),
+        },
+        "investment_plan": final_state.get("investment_plan", ""),
+        "final_trade_decision": final_state.get("final_trade_decision", ""),
+    }
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -276,12 +263,7 @@ def run_analysis_thread(ticker: str, trade_date: str, analysts: list[str]):
 # ---------------------------------------------------------------------------
 for key, default in {
     "run_result": None,
-    "run_decision": None,
-    "run_error": None,
-    "running": False,
-    "progress_step": 0,
-    "progress_label": "",
-    "view_mode": "new",  # "new" or "history"
+    "view_mode": "new",
     "history_result": None,
 }.items():
     if key not in st.session_state:
@@ -295,7 +277,6 @@ with st.sidebar:
     st.caption("Multi-Agent LLM Trading Framework")
     st.divider()
 
-    # Mode selector
     mode = st.radio("Mode", ["🚀 New Analysis", "📂 History"], horizontal=True, label_visibility="collapsed")
 
     if mode == "🚀 New Analysis":
@@ -304,7 +285,6 @@ with st.sidebar:
         st.markdown("### Settings")
         ticker = st.text_input("Stock Ticker", value="NVDA", max_chars=10).upper()
 
-        # Quick pick buttons
         cols = st.columns(4)
         for i, t in enumerate(["NVDA", "AAPL", "TSLA", "MSFT"]):
             if cols[i].button(t, use_container_width=True, key=f"q_{t}"):
@@ -332,29 +312,16 @@ with st.sidebar:
 
         st.divider()
 
-        # Start button
-        if st.button(
+        start_clicked = st.button(
             "🚀 Start Analysis",
             use_container_width=True,
             type="primary",
-            disabled=st.session_state.running or len(selected_analysts) == 0,
-        ):
-            st.session_state.running = True
-            st.session_state.run_result = None
-            st.session_state.run_decision = None
-            st.session_state.run_error = None
-            st.session_state.progress_step = 0
-            st.session_state.progress_label = "Initializing..."
-
-            thread = threading.Thread(
-                target=run_analysis_thread,
-                args=(ticker, str(trade_date), selected_analysts),
-                daemon=True,
-            )
-            thread.start()
+            disabled=len(selected_analysts) == 0,
+        )
 
     else:
         st.session_state.view_mode = "history"
+        start_clicked = False
         history = list_history()
         if history:
             options = [f"{h['ticker']} — {h['date']}" for h in history]
@@ -366,6 +333,24 @@ with st.sidebar:
             st.info("No history yet. Run an analysis first!")
 
 # ---------------------------------------------------------------------------
+# Main area — header
+# ---------------------------------------------------------------------------
+st.markdown("# 📈 TradingAgents Dashboard")
+st.caption("AI Multi-Agent Collaborative Trading Analysis System")
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Run analysis (synchronous, in main thread)
+# ---------------------------------------------------------------------------
+if start_clicked:
+    try:
+        result = run_analysis_sync(ticker, str(trade_date), selected_analysts)
+        st.session_state.run_result = result
+        st.rerun()
+    except Exception as e:
+        st.error(f"Analysis failed: {e}")
+
+# ---------------------------------------------------------------------------
 # Determine which result to display
 # ---------------------------------------------------------------------------
 result = None
@@ -375,52 +360,11 @@ elif st.session_state.run_result:
     result = st.session_state.run_result
 
 # ---------------------------------------------------------------------------
-# Main area — header
-# ---------------------------------------------------------------------------
-st.markdown("# 📈 TradingAgents Dashboard")
-st.caption("AI Multi-Agent Collaborative Trading Analysis System")
-st.divider()
-
-# ---------------------------------------------------------------------------
-# Progress bar (when running)
-# ---------------------------------------------------------------------------
-if st.session_state.running:
-    total = len(AGENT_STEPS)
-    current = st.session_state.progress_step
-    pct = min(current / total, 1.0)
-
-    st.markdown(f"### 🔄 Analysis in Progress")
-    st.progress(pct, text=st.session_state.progress_label)
-
-    # Step indicators
-    cols = st.columns(min(total, 6))
-    for i, step in enumerate(AGENT_STEPS):
-        col = cols[i % len(cols)]
-        if i < current:
-            col.markdown(f"<span class='step-done'>✅ {step}</span>", unsafe_allow_html=True)
-        elif i == current:
-            col.markdown(f"<span class='step-active'>🔄 {step}</span>", unsafe_allow_html=True)
-        else:
-            col.markdown(f"<span class='step-wait'>⬜ {step}</span>", unsafe_allow_html=True)
-
-    if st.session_state.run_error:
-        st.error(f"Error: {st.session_state.run_error}")
-        st.session_state.running = False
-    elif current >= total:
-        st.session_state.running = False
-        st.rerun()
-    else:
-        # Auto-refresh every 3 seconds
-        import time
-        time.sleep(3)
-        st.rerun()
-
-# ---------------------------------------------------------------------------
 # Display results
 # ---------------------------------------------------------------------------
-elif result:
-    ticker = result.get("company_of_interest", "N/A")
-    trade_date = result.get("trade_date", "N/A")
+if result:
+    r_ticker = result.get("company_of_interest", "N/A")
+    r_trade_date = result.get("trade_date", "N/A")
     final_decision_text = result.get("final_trade_decision", "")
     decision = extract_decision(final_decision_text)
 
@@ -431,7 +375,7 @@ elif result:
         st.markdown(
             f"""<div class="metric-card">
             <h3>TICKER</h3>
-            <p style="font-size:2rem">{ticker}</p>
+            <p style="font-size:2rem">{r_ticker}</p>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -440,7 +384,7 @@ elif result:
         st.markdown(
             f"""<div class="metric-card">
             <h3>ANALYSIS DATE</h3>
-            <p>{trade_date}</p>
+            <p>{r_trade_date}</p>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -475,19 +419,12 @@ elif result:
     with mc2:
         if allocation:
             st.markdown("#### 🥧 Portfolio Allocation")
-            import pandas as pd
-            alloc_df = pd.DataFrame({
-                "Asset": list(allocation.keys()),
-                "Allocation (%)": list(allocation.values()),
-            })
-            # Color-coded horizontal bars
             colors = ["#00c853", "#2196f3", "#ff9800", "#9c27b0", "#f44336"]
-            for i, row in alloc_df.iterrows():
+            for i, (asset, pct) in enumerate(allocation.items()):
                 color = colors[i % len(colors)]
-                pct = row["Allocation (%)"]
                 st.markdown(
                     f'<div style="margin:6px 0">'
-                    f'<span style="font-weight:600">{row["Asset"]}</span>'
+                    f'<span style="font-weight:600">{asset}</span>'
                     f'<div style="background:rgba(128,128,128,.15);border-radius:8px;height:28px;margin-top:4px">'
                     f'<div style="background:{color};border-radius:8px;height:28px;width:{pct}%;'
                     f'display:flex;align-items:center;padding-left:10px;color:#fff;font-weight:700;font-size:.85rem">'
@@ -504,7 +441,6 @@ elif result:
         ["📈 Analysts", "⚔️ Research Debate", "💼 Trading Plan", "⚖️ Risk Debate", "🔄 Workflow"]
     )
 
-    # ── Tab: Analysts ──
     with tab_analysts:
         analyst_reports = [
             ("📊 Market Analyst", result.get("market_report", "")),
@@ -518,42 +454,28 @@ elif result:
                 with st.expander(title, expanded=False):
                     st.markdown(content)
 
-    # ── Tab: Research Debate ──
     with tab_research:
         debate = result.get("investment_debate_state", {})
-
         col_bull, col_bear = st.columns(2)
         with col_bull:
             st.markdown("### 🐂 Bull Researcher")
             bull_text = debate.get("bull_history", "").strip()
             if bull_text:
-                st.markdown(
-                    f'<div class="debate-card debate-bull">{bull_text}</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div class="debate-card debate-bull">{bull_text}</div>', unsafe_allow_html=True)
             else:
                 st.caption("No bull arguments recorded.")
-
         with col_bear:
             st.markdown("### 🐻 Bear Researcher")
             bear_text = debate.get("bear_history", "").strip()
             if bear_text:
-                st.markdown(
-                    f'<div class="debate-card debate-bear">{bear_text}</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div class="debate-card debate-bear">{bear_text}</div>', unsafe_allow_html=True)
             else:
                 st.caption("No bear arguments recorded.")
-
         judge = debate.get("judge_decision", "").strip()
         if judge:
             st.markdown("### ⚖️ Research Manager Decision")
-            st.markdown(
-                f'<div class="debate-card debate-judge">{judge}</div>',
-                unsafe_allow_html=True,
-            )
+            st.markdown(f'<div class="debate-card debate-judge">{judge}</div>', unsafe_allow_html=True)
 
-    # ── Tab: Trading Plan ──
     with tab_trading:
         trader_text = result.get("trader_investment_decision", "") or result.get("investment_plan", "")
         if trader_text:
@@ -561,41 +483,24 @@ elif result:
         else:
             st.info("Trading plan not available.")
 
-    # ── Tab: Risk Debate ──
     with tab_risk:
         risk = result.get("risk_debate_state", {})
-
         c_agg, c_neu, c_con = st.columns(3)
-
         with c_agg:
             st.markdown("### 🔥 Aggressive")
             agg = risk.get("aggressive_history", "").strip()
-            if agg:
-                st.markdown(agg)
-            else:
-                st.caption("N/A")
-
+            st.markdown(agg) if agg else st.caption("N/A")
         with c_neu:
             st.markdown("### ⚖️ Neutral")
             neu = risk.get("neutral_history", "").strip()
-            if neu:
-                st.markdown(neu)
-            else:
-                st.caption("N/A")
-
+            st.markdown(neu) if neu else st.caption("N/A")
         with c_con:
             st.markdown("### 🛡️ Conservative")
             con = risk.get("conservative_history", "").strip()
-            if con:
-                st.markdown(con)
-            else:
-                st.caption("N/A")
+            st.markdown(con) if con else st.caption("N/A")
 
-    # ── Tab: Workflow ──
     with tab_workflow:
         st.markdown("### Agent Workflow Graph")
-
-        # Show pre-generated PNG if available, otherwise show text diagram
         graph_img = Path("trading_agents_graph.png")
         if graph_img.exists():
             col_wf1, col_wf2, col_wf3 = st.columns([1, 2, 1])
@@ -604,7 +509,6 @@ elif result:
         else:
             st.markdown("""
 **Pipeline Flow:**
-
 ```
 START → Market Analyst → Social Analyst → News Analyst
      → Fundamentals Analyst → Macro Analyst
@@ -614,19 +518,15 @@ START → Market Analyst → Social Analyst → News Analyst
 ```
 """)
 
-    # ── Full report expander ──
     with st.expander("📄 Full Portfolio Manager Report"):
         st.markdown(final_decision_text)
 
-# ---------------------------------------------------------------------------
-# Empty state
-# ---------------------------------------------------------------------------
 else:
     st.markdown(
         """
     <div style="text-align:center; padding:80px 20px">
         <h2 style="opacity:.5">👈 Configure and start an analysis</h2>
-        <p style="opacity:.4">Select a stock ticker and date from the sidebar, then click Start Analysis</p>
+        <p style="opacity:.4">Select a stock ticker and date, then click Start Analysis</p>
     </div>
     """,
         unsafe_allow_html=True,
