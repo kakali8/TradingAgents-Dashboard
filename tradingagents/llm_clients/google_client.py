@@ -26,7 +26,7 @@ class GoogleClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured ChatGoogleGenerativeAI instance."""
         self.warn_if_unknown_model()
-        llm_kwargs = {"model": self.model}
+        llm_kwargs = {"model": self.model, "version": "v1"}
 
         if self.base_url:
             llm_kwargs["base_url"] = self.base_url
@@ -47,14 +47,14 @@ class GoogleClient(BaseLLMClient):
         thinking_level = self.kwargs.get("thinking_level")
         if thinking_level:
             model_lower = self.model.lower()
-            if "gemini-3" in model_lower:
+            if "gemini-3" in model_lower or "pro" in model_lower:
                 # Gemini 3 Pro doesn't support "minimal", use "low" instead
-                if "pro" in model_lower and thinking_level == "minimal":
-                    thinking_level = "low"
+                #if "pro" in model_lower and thinking_level == "minimal":
+                    #thinking_level = "low"
                 llm_kwargs["thinking_level"] = thinking_level
-            else:
+            #else:
                 # Gemini 2.5: map to thinking_budget
-                llm_kwargs["thinking_budget"] = -1 if thinking_level == "high" else 0
+                #llm_kwargs["thinking_budget"] = -1 if thinking_level == "high" else 0
 
         return NormalizedChatGoogleGenerativeAI(**llm_kwargs)
 

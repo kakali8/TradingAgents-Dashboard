@@ -215,5 +215,20 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Temp outputs
+run_output_*.md
+full_single_agent_result*.txt
+final_report.txt
+output_baseline.txt
+api_test.py
+run_my_pot.py
+
 # Cache
 **/data_cache/

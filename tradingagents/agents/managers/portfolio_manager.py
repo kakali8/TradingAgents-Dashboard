@@ -1,5 +1,7 @@
+from langchain_core.messages import AIMessage
 from tradingagents.agents.utils.agent_utils import build_instrument_context, get_language_instruction
-
+import re
+import time  #[NEW] 导入 time 模块
 
 def create_portfolio_manager(llm, memory):
     def portfolio_manager_node(state) -> dict:
@@ -8,40 +10,45 @@ def create_portfolio_manager(llm, memory):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
+        #
+        macro_report = state.get("macro_report", "Macro report unavailable.")
         market_research_report = state["market_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
         sentiment_report = state["sentiment_report"]
         trader_plan = state["investment_plan"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = f"{macro_report}\n\n{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)
 
         past_memory_str = ""
         for i, rec in enumerate(past_memories, 1):
             past_memory_str += rec["recommendation"] + "\n\n"
 
-        prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+        # 🚀 [NEW] 提示词全面重构：从“单票评级”升级为“多资产组合分配”
+        prompt = f"""As the Chief Multi-Asset Portfolio Manager, your mandate is to synthesize the risk analysts' debate and deliver a final, mathematically sound Asset Allocation strategy. 
+
+You do NOT just trade a single stock in a vacuum. You must construct a balanced portfolio based on the macro environment, peer comparison, and risk parameters.
 
 {instrument_context}
 
 ---
 
-**Rating Scale** (use exactly one):
-- **Buy**: Strong conviction to enter or add to position
-- **Overweight**: Favorable outlook, gradually increase exposure
-- **Hold**: Maintain current position, no action needed
-- **Underweight**: Reduce exposure, take partial profits
-- **Sell**: Exit position or avoid entry
+[NEW] **Multi-Asset Allocation Mandate**:
+You must allocate 100% of the theoretical portfolio capital. You have three asset classes to choose from:
+1. **Target Asset**: The primary company of interest.
+2. **Peer/Competitor Assets**: Based on the 'Peer Comparison' data found in the Fundamentals Report (e.g., allocating to AMD if NVDA's risk is too high).
+3. **Cash / Risk-Free**: If the Macro Report or Risk Analysts warn of high volatility, overfitting, or severe market risk, you MUST allocate a significant portion to Cash.
 
 **Context:**
 - Trader's proposed plan: **{trader_plan}**
 - Lessons from past decisions: **{past_memory_str}**
 
 **Required Output Structure:**
-1. **Rating**: State one of Buy / Overweight / Hold / Underweight / Sell.
-2. **Executive Summary**: A concise action plan covering entry strategy, position sizing, key risk levels, and time horizon.
-3. **Investment Thesis**: Detailed reasoning anchored in the analysts' debate and past reflections.
+1. **Portfolio Allocation (Markdown Table)**: Explicitly state the percentage allocation across the Target Asset, Peer Assets, and Cash. The total MUST equal 100%. 
+   *(Example: 40% NVDA, 20% AMD, 40% Cash)*
+2. **Quantitative Justification**: Explain the allocation using the mathematical probability (Roll-forward win rate) from the Market Analyst and the margin comparisons from the Fundamentals Analyst.
+3. **Risk Management Overlay**: Explain how the debate from the Risk Analysts (Aggressive vs. Conservative) influenced your Cash position.
 
 ---
 
@@ -70,6 +77,8 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
         return {
             "risk_debate_state": new_risk_debate_state,
             "final_trade_decision": response.content,
+            # [NEW] 将经理的最终裁决推送到公共频道
+            "messages": [AIMessage(content=f"Portfolio Manager: {response.content}", name="Portfolio_Manager")]
         }
 
     return portfolio_manager_node

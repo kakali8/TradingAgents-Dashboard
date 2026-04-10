@@ -20,6 +20,7 @@ from tradingagents.agents.utils.agent_states import (
 )
 from tradingagents.dataflows.config import set_config
 
+
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
@@ -31,6 +32,16 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
     get_insider_transactions,
     get_global_news
+)
+
+from tradingagents.agents.utils.macro_data_tools import get_macro_indicators, get_economic_data
+
+# [NEW] 导入所有的高阶自定义工具
+from tradingagents.agents.utils.advanced_tools import (
+    get_peer_comparison,
+    get_rsi_backtest,
+    get_retail_sentiment,
+    search_earnings_call
 )
 
 from .conditional_logic import ConditionalLogic
@@ -45,7 +56,7 @@ class TradingAgentsGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals"],
+        selected_analysts=["market", "social", "news", "fundamentals", "macro"],
         debug=False,
         config: Dict[str, Any] = None,
         callbacks: Optional[List] = None,
@@ -164,12 +175,14 @@ class TradingAgentsGraph:
                     get_stock_data,
                     # Technical indicators
                     get_indicators,
+                    # [NEW] 历史胜率回测工具
+                    get_rsi_backtest,
                 ]
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
-                    get_news,
+                    # [NEW] 替换为真正的散户情绪工具 (删除了原来错误的 get_news)
+                    get_retail_sentiment,
                 ]
             ),
             "news": ToolNode(
@@ -178,6 +191,8 @@ class TradingAgentsGraph:
                     get_news,
                     get_global_news,
                     get_insider_transactions,
+                    # [NEW] RAG 财报检索工具
+                    search_earnings_call,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -187,8 +202,14 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    # [NEW] 同行多资产对比工具
+                    get_peer_comparison,
                 ]
             ),
+            "macro": ToolNode([
+                get_macro_indicators,
+                get_economic_data
+            ]),
         }
 
     def propagate(self, company_name, trade_date):
@@ -231,6 +252,7 @@ class TradingAgentsGraph:
         self.log_states_dict[str(trade_date)] = {
             "company_of_interest": final_state["company_of_interest"],
             "trade_date": final_state["trade_date"],
+            "macro_report": final_state.get("macro_report", ""),
             "market_report": final_state["market_report"],
             "sentiment_report": final_state["sentiment_report"],
             "news_report": final_state["news_report"],

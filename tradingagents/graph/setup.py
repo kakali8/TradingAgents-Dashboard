@@ -10,6 +10,7 @@ from tradingagents.agents.utils.agent_states import AgentState
 
 from .conditional_logic import ConditionalLogic
 
+from tradingagents.agents.analysts.macro_analyst import create_macro_analyst
 
 class GraphSetup:
     """Handles the setup and configuration of the agent graph."""
@@ -84,6 +85,13 @@ class GraphSetup:
             )
             delete_nodes["fundamentals"] = create_msg_delete()
             tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
+
+        if "macro" in selected_analysts:
+            analyst_nodes["macro"] = create_macro_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["macro"] = create_msg_delete()
+            tool_nodes["macro"] = self.tool_nodes["macro"]
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(

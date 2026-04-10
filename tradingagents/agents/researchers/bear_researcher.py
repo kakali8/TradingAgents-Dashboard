@@ -10,12 +10,13 @@ def create_bear_researcher(llm, memory):
         bear_history = investment_debate_state.get("bear_history", "")
 
         current_response = investment_debate_state.get("current_response", "")
+        macro_report = state.get("macro_report", "Macro report unavailable.")
         market_research_report = state["market_report"]
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = f"{macro_report}\n\n{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)
 
         past_memory_str = ""
@@ -29,11 +30,13 @@ Key points to focus on:
 - Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
 - Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
 - Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
+- [NEW] Evidence-Based Reasoning (RAG Focus): You MUST explicitly search the 'Latest world affairs news' (which contains RAG Earnings Call data) for management quotes. Use their exact words to highlight hidden risks or overly optimistic guidance.
 - Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
 - Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
 
 Resources available:
 
+Macroeconomic Environment: {macro_report}
 Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
@@ -45,6 +48,8 @@ Use this information to deliver a compelling bear argument, refute the bull's cl
 """
 
         response = llm.invoke(prompt)
+
+        time.sleep(4) 
 
         argument = f"Bear Analyst: {response.content}"
 

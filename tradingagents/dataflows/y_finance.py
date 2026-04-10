@@ -1,3 +1,4 @@
+import pandas as pd
 from typing import Annotated
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
