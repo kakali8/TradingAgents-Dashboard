@@ -8,7 +8,6 @@ from pathlib import Path
 from datetime import date, timedelta
 
 import streamlit as st
-import plotly.graph_objects as go
 
 # ---------------------------------------------------------------------------
 # Page config (must be first Streamlit call)
@@ -476,26 +475,25 @@ elif result:
     with mc2:
         if allocation:
             st.markdown("#### 🥧 Portfolio Allocation")
-            fig = go.Figure(
-                data=[
-                    go.Pie(
-                        labels=list(allocation.keys()),
-                        values=list(allocation.values()),
-                        hole=0.45,
-                        marker=dict(
-                            colors=["#00c853", "#2196f3", "#ff9800", "#9c27b0", "#f44336"]
-                        ),
-                        textinfo="label+percent",
-                        textfont_size=14,
-                    )
-                ]
-            )
-            fig.update_layout(
-                margin=dict(t=10, b=10, l=10, r=10),
-                height=300,
-                showlegend=False,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            import pandas as pd
+            alloc_df = pd.DataFrame({
+                "Asset": list(allocation.keys()),
+                "Allocation (%)": list(allocation.values()),
+            })
+            # Color-coded horizontal bars
+            colors = ["#00c853", "#2196f3", "#ff9800", "#9c27b0", "#f44336"]
+            for i, row in alloc_df.iterrows():
+                color = colors[i % len(colors)]
+                pct = row["Allocation (%)"]
+                st.markdown(
+                    f'<div style="margin:6px 0">'
+                    f'<span style="font-weight:600">{row["Asset"]}</span>'
+                    f'<div style="background:rgba(128,128,128,.15);border-radius:8px;height:28px;margin-top:4px">'
+                    f'<div style="background:{color};border-radius:8px;height:28px;width:{pct}%;'
+                    f'display:flex;align-items:center;padding-left:10px;color:#fff;font-weight:700;font-size:.85rem">'
+                    f'{pct}%</div></div></div>',
+                    unsafe_allow_html=True,
+                )
         else:
             st.info("Portfolio allocation not available.")
 
